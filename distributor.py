@@ -1,9 +1,10 @@
 import os
 from os import scandir
-
 import toml.decoder
 from toml import load
-import zipfile
+from zipfile import ZipFile
+import abc
+import glob
 
 # Step 1: find distribution-config.toml -> initialize all config values
 # Step 2: find mod_warehouse -> look at mods if there are any
@@ -12,14 +13,53 @@ import zipfile
 # Step 5: upload new archives to Google Drive
 
 
-class Project:
+class Version:
+    def __init__(self, major_version, minor_version, patch):
+        self.major = major_version,
+        self.minor = minor_version,
+        self.patch = patch
 
+
+class Task(abc.ABC):
+    @abc.abstractmethod
+    def run(self):
+        pass
+
+
+class ArchiveTask(Task):
+    def __init__(self):
+        pass
+
+    def run(self):
+        archives_names = {
+            "server": "essentials",
+            "client": "client"
+        }
+        for mods_folder in ["server", "client"]:
+            server_mods = scandir(f"./mod_warehouse/mods/{mods_folder}")
+            if len(list(server_mods)) == 0:
+                print(f"No mods in mods/{mods_folder} are found. Skip archiving them.")
+            else:
+                print(f"Found some mods in mods/{mods_folder}. Proceed to archive them...")
+                with ZipFile(f"./mod_warehouse/archives/{archives_names[mods_folder]}/essentials.zip", "w") as archive:
+                    print(glob.glob(f"./mod_warehouse/mods/{mods_folder}/*"))
+                    for raw_mod in scandir(f"./mod_warehouse/mods/{mods_folder}/"):
+                        print(f"Archiving {raw_mod.name}.")
+                        archive.write(f"./mod_warehouse/mods/{mods_folder}/{raw_mod.name}", raw_mod.name)
+
+
+class Project:
     def __init__(self):
         if Project.verify_project() is False:
             print("Project didn't exist or wasn't in good shape and now needs configuration."
                   " Please follow steps above to prepare project.")
+            exit(1)
         else:
             print("Everything is OK. Ready to work.")
+
+    @staticmethod
+    def run_tasks():
+        ArchiveTask().run()
 
     def configure(self, config):
         pass
@@ -80,7 +120,7 @@ class Project:
             os.makedirs("./mod_warehouse/archives/essentials")
             os.makedirs("./mod_warehouse/archives/client")
 
-        except FileExistsError as error:
+        except FileExistsError:
             print("Distributor tried to create 'mod_warehouse', but it already exits. This error shall never occur,"
                   "if it does, that means that your program is corrupted and won't work properly.\n Please download "
                   "a newer stable version. If this is a 'new' and 'stable' version, please contact the developer.")
@@ -205,7 +245,7 @@ class Project:
             if "client-mods-version" not in configuration.keys():
                 isFine = False
                 print("Didn't find `client-mods-version` property in the config. Please check your configuration file.")
-        except toml.decoder.TomlDecodeError as decode_error:
+        except toml.decoder.TomlDecodeError:
             isFine = False
             print("Failed to load configuration. Please verify the configuration file.")
         return isFine
@@ -226,6 +266,5 @@ class Project:
 
 
 if __name__ == '__main__':
-    a = Project()
-
-
+    project = Project()
+    project.run_tasks()
