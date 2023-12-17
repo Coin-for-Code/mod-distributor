@@ -1,10 +1,14 @@
 import os
 from os import scandir
+
+import paramiko
+import pysftp
 import toml.decoder
 from toml import load
 from zipfile import ZipFile
 import abc
 import glob
+import ftplib
 
 # Step 1: find distribution-config.toml -> initialize all config values
 # Step 2: find mod_warehouse -> look at mods if there are any
@@ -48,6 +52,61 @@ class ArchiveTask(Task):
                         archive.write(f"./mod_warehouse/mods/{mods_folder}/{raw_mod.name}", raw_mod.name)
 
 
+class ServerUpdateTask(Task):
+    def __init__(self, host, login, password, port):
+        self.host = host
+        self.login = login
+        self.password = password
+        self.port = port
+
+    def run(self):
+        print("Connecting to the server.")
+        try:
+            # create ssh client
+            ssh_client = paramiko.SSHClient()
+            ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+            ssh_client.connect(hostname=self.host, port=self.port, username=self.login, password=self.password)
+
+            with ssh_client.open_sftp() as server:
+                to_upload, to_delete = ServerUpdateTask.mod_comparison(map(lambda file: file.name,
+                                                                           scandir("./mod_warehouse/mods/server/")),
+                                                                       server.listdir("./mods"))
+                print("Removing mods...")
+                for mod in to_delete:
+                    print(f"Removing {mod} from the server.")
+                    server.remove(f"./mods/{mod}")
+                print("Uploading mods...")
+                for mod in to_upload:
+                    print(f"Uploading {mod} to the server.")
+                    server.put(f"./mod_warehouse/mods/server/{mod}", f"./mods/{mod}")
+
+            ssh_client.close()
+
+        except Exception as e:
+            raise e
+
+    @staticmethod
+    def mod_comparison(local_mods, server_mods):
+        to_upload = []
+        for local_mod in local_mods:
+            isOnServer = False
+            for server_mod in server_mods:
+                if local_mod == server_mod:
+                    isOnServer = True
+                    server_mods.remove(local_mod)
+                    print(f"Server already has {local_mod} installed, no action needed.")
+                    break
+            if isOnServer is False:
+                to_upload.append(local_mod)
+                print(f"Server does not have {local_mod} mod, installation is needed.")
+        to_delete = server_mods
+        if len(to_delete) >= 1:
+            print(f"Server has unnecessary mods: {to_delete}.")
+
+        return to_upload, to_delete
+
+
 class Project:
     def __init__(self):
         if Project.verify_project() is False:
@@ -57,12 +116,21 @@ class Project:
         else:
             print("Everything is OK. Ready to work.")
 
-    @staticmethod
-    def run_tasks():
-        ArchiveTask().run()
+        with open("distribution-config.toml", "r") as config:
+            configuration = load(config)
+            self.ftp_host = configuration["FTP"]["host"]
+            self.ftp_user = configuration["FTP"]["user"]
+            self.ftp_password = configuration["FTP"]["password"]
+            self.ftp_port = configuration["FTP"]["port"]
 
-    def configure(self, config):
-        pass
+    def run_tasks(self):
+        print("Running archiving task...")
+        ArchiveTask().run()
+        print("Running server task...")
+        ServerUpdateTask(host=self.ftp_host,
+                         login=self.ftp_user,
+                         password=self.ftp_password,
+                         port=self.ftp_port).run()
 
     @staticmethod
     def verify_project() -> bool:
@@ -239,12 +307,29 @@ class Project:
         isFine = True
         try:
             configuration = load(config)
-            if "server-mods-version" not in configuration.keys():
+            # if "server-mods-version" not in configuration.keys():
+            #     isFine = False
+            #     print("Didn't find `server-mods-config` property in the config. Please check your configuration file.")
+            # if "client-mods-version" not in configuration.keys():
+            #     isFine = False
+            #     print("Didn't find `client-mods-version` property in the config. Please check your configuration file.")
+            if "FTP" not in configuration.keys():
                 isFine = False
-                print("Didn't find `server-mods-config` property in the config. Please check your configuration file.")
-            if "client-mods-version" not in configuration.keys():
-                isFine = False
-                print("Didn't find `client-mods-version` property in the config. Please check your configuration file.")
+                print("Didn't find `FTP` table in the config. Please check your configuration file.")
+            else:
+                if "host" not in configuration["FTP"]:
+                    isFine = False
+                    print("Didn't find `host` in the FTP table of the config. Please check your configuration file.")
+                if "user" not in configuration["FTP"]:
+                    isFine = False
+                    print("Didn't find `user` in the FTP table of the config. Please check your configuration file.")
+                if "password" not in configuration["FTP"]:
+                    isFine = False
+                    print("Didn't find `password` in the FTP table of the config. Please check your configuration file.")
+                if "port" not in configuration["FTP"]:
+                    isFine = False
+                    print(
+                        "Didn't find `port` in the FTP table of the config. Please check your configuration file.")
         except toml.decoder.TomlDecodeError:
             isFine = False
             print("Failed to load configuration. Please verify the configuration file.")
@@ -260,8 +345,11 @@ class Project:
     def create_config():
         print("Creating the config file...")
         with open("distribution-config.toml", "w") as config:
-            config.write("server-mods-version=\n"
-                         "client-mods-version=\n")
+            config.write("[FTP]\n"
+                         "host=\n"
+                         "user=\n"
+                         "password=\n"
+                         "port=")
         print("Created the config.")
 
 
